@@ -1,0 +1,38 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run CRC vs Hamming simulation",
+			"type": "shell",
+			"command": "python",
+			"args": [
+				"\"d:\\Univercidad\\QuintoSemestre\\REDES\\1 PARCIAL\\Deber\\Codigo\\index.py\"",
+				"--text",
+				"\"Hola CRC y Hamming\"",
+				"--sleep-ms",
+				"2"
+			],
+			"problemMatcher": [
+				"$python"
+			],
+			"group": "build"
+		},
+		{
+			"label": "Run CRC vs Hamming simulation",
+			"type": "shell",
+			"command": "py",
+			"args": [
+				"-3.12",
+				"\"d:\\Univercidad\\QuintoSemestre\\REDES\\1 PARCIAL\\Deber\\Codigo\\index.py\"",
+				"--text",
+				"\"Hola CRC y Hamming\"",
+				"--sleep-ms",
+				"2"
+			],
+			"problemMatcher": [
+				"$python"
+			],
+			"group": "build"
+		}
+	]
+}
