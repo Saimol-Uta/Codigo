@@ -64,9 +64,28 @@ def decodificar_corregir_hamming(codigo_recibido: int) -> int:
     c4 = p[3] ^ p[4] ^ p[5] ^ p[6] ^ p[11]
     c8 = p[7] ^ p[8] ^ p[9] ^ p[10] ^ p[11]
     posicion_error = (c8 << 3) | (c4 << 2) | (c2 << 1) | c1
-    if posicion_error != 0:
-        return codigo_recibido ^ (1 << (12 - posicion_error))
-    return codigo_recibido
+
+    if posicion_error == 0:
+        # Síndrome 0 -> o no hay error o hay error no detectable por paridad (raro)
+        return codigo_recibido, 'ok'
+
+    # Corregir bit indicado
+    corregido = codigo_recibido ^ (1 << (12 - posicion_error))
+
+    # Verificar si tras la corrección la palabra queda consistente
+    # Recalcular paridad sobre la palabra corregida
+    bits_corr = [(corregido >> i) & 1 for i in range(11, -1, -1)]
+    p2 = bits_corr
+    c1c = p2[0] ^ p2[2] ^ p2[4] ^ p2[6] ^ p2[8] ^ p2[10]
+    c2c = p2[1] ^ p2[2] ^ p2[5] ^ p2[6] ^ p2[9] ^ p2[10]
+    c4c = p2[3] ^ p2[4] ^ p2[5] ^ p2[6] ^ p2[11]
+    c8c = p2[7] ^ p2[8] ^ p2[9] ^ p2[10] ^ p2[11]
+    sindrome_corregido = (c8c << 3) | (c4c << 2) | (c2c << 1) | c1c
+    if sindrome_corregido == 0:
+        return corregido, 'corregido'
+
+    # Si después de la corrección el síndrome no es 0, entonces hay múltiples errores: no corregible
+    return codigo_recibido, 'no_corregible'
 
 # --- UTILIDADES DE SIMULACIÓN Y PROGRESO ---
 
@@ -116,21 +135,25 @@ def procesar_hamming(bytes_data: bytes, estado: dict, lock: threading.Lock, slee
     inicio = time.perf_counter()
     total = len(bytes_data)
     corregidos = 0
+    no_corregibles = 0
     procesados = 0
     for b in bytes_data:
         codigo = codificar_hamming(b)  # 12 bits
         recibido = simular_error_un_bit(codigo, 12)
-        corregido = decodificar_corregir_hamming(recibido)
-        if corregido == codigo:
+        corregido, status = decodificar_corregir_hamming(recibido)
+        if status == 'corregido':
             corregidos += 1
+        elif status == 'no_corregible':
+            no_corregibles += 1
         procesados += 1
         with lock:
             estado['ham']['procesados'] = procesados
             estado['ham']['corregidos'] = corregidos
+            estado['ham']['no_corregibles'] = no_corregibles
         if sleep_ms:
             time.sleep(sleep_ms / 1000.0)
     fin = time.perf_counter()
-    return Resultado(total=total, procesados=procesados, tiempo_ms=(fin - inicio) * 1000.0, metrica=f"errores corregidos: {corregidos}")
+    return Resultado(total=total, procesados=procesados, tiempo_ms=(fin - inicio) * 1000.0, metrica=f"errores corregidos: {corregidos}, no_corregibles: {no_corregibles}")
 
 
 def render_barras(estado: dict, lock: threading.Lock, stop_event: threading.Event, inicio_crc: float, inicio_ham: float):

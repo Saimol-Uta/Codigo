@@ -25,11 +25,11 @@ class App(tk.Tk):
         self.text_entry.grid(column=1, row=0, columnspan=3, sticky=tk.W)
         self.text_entry.insert(0, "Hola CRC y Hamming desde GUI")
 
-        # Row: Polinomio
+        # Row: Polinomio (combobox)
         ttk.Label(frm, text="Polinomio (ej. 0b100000111):").grid(column=0, row=1, sticky=tk.W)
-        self.poly_entry = ttk.Entry(frm, width=20)
-        self.poly_entry.grid(column=1, row=1, sticky=tk.W)
-        self.poly_entry.insert(0, "0b100000111")
+        self.poly_combo = ttk.Combobox(frm, values=["0b100000111", "0x107", "0x7", "0x9B"], width=18)
+        self.poly_combo.grid(column=1, row=1, sticky=tk.W)
+        self.poly_combo.set("0b100000111")
 
         # Row: Sleep ms
         ttk.Label(frm, text="Sleep ms (visual):").grid(column=2, row=1, sticky=tk.W)
@@ -59,7 +59,7 @@ class App(tk.Tk):
         # Info labels under progressbars
         self.lbl_crc_info = ttk.Label(frm, text="CRC: 0/0, t=0.0ms, detectados=0")
         self.lbl_crc_info.grid(column=1, row=5, columnspan=3, sticky=tk.W)
-        self.lbl_ham_info = ttk.Label(frm, text="Hamming: 0/0, t=0.0ms, corregidos=0")
+        self.lbl_ham_info = ttk.Label(frm, text="Hamming: 0/0, t=0.0ms, corregidos=0, no_corregibles=0")
         self.lbl_ham_info.grid(column=1, row=6, columnspan=3, sticky=tk.W)
         self.lbl_summary = ttk.Label(frm, text="Resumen: -")
         self.lbl_summary.grid(column=0, row=7, columnspan=4, sticky=tk.W)
@@ -74,6 +74,10 @@ class App(tk.Tk):
         self.log = ScrolledText(frm, height=10)
         self.log.grid(column=0, row=9, columnspan=4, sticky=tk.EW)
 
+        # Detailed metrics panel
+        self.metrics_panel = ScrolledText(frm, height=6)
+        self.metrics_panel.grid(column=0, row=10, columnspan=4, sticky=tk.EW)
+
         # Internal
         self._worker = None
         self._stop_event = threading.Event()
@@ -84,14 +88,19 @@ class App(tk.Tk):
         self.stop_btn.config(state=tk.NORMAL)
         self.log.delete("1.0", tk.END)
         self._stop_event.clear()
-
         texto = self.text_entry.get()
-        poly_s = self.poly_entry.get().strip()
-        sleep_ms = float(self.sleep_entry.get() or 0)
+        poly_s = self.poly_combo.get().strip()
+        try:
+            sleep_ms = float(self.sleep_entry.get() or 0)
+        except Exception:
+            sleep_ms = 0.0
         byte_s = self.byte_entry.get().strip()
-        iters = int(self.iters_entry.get() or 100000)
+        try:
+            iters = int(self.iters_entry.get() or 100000)
+        except Exception:
+            iters = 100000
 
-        # Resolve poly
+        # Resolve poly from combobox string
         try:
             if poly_s.startswith("0x"):
                 poly = int(poly_s, 16)
@@ -138,8 +147,9 @@ class App(tk.Tk):
                 t_ham = ham.get('tiempo_ms', 0.0)
                 det = crc.get('detectados', 0)
                 cor = ham.get('corregidos', 0)
+                no_corr = ham.get('no_corregibles', 0)
                 self.lbl_crc_info.config(text=f"CRC: {proc_crc}/{total_crc}, t={t_crc:.3f} ms, detectados={det}")
-                self.lbl_ham_info.config(text=f"Hamming: {proc_ham}/{total_ham}, t={t_ham:.3f} ms, corregidos={cor}")
+                self.lbl_ham_info.config(text=f"Hamming: {proc_ham}/{total_ham}, t={t_ham:.3f} ms, corregidos={cor}, no_corregibles={no_corr}")
                 # If both finished, show summary
                 if proc_crc >= total_crc and proc_ham >= total_ham:
                     if t_crc < t_ham:
@@ -149,6 +159,11 @@ class App(tk.Tk):
                     else:
                         winner = "Empate"
                     self.lbl_summary.config(text=f"Resumen: Más rápido = {winner}")
+                    # Update metrics panel with detailed final metrics
+                    self.metrics_panel.delete('1.0', tk.END)
+                    self.metrics_panel.insert(tk.END, f"CRC final:\n  procesados={proc_crc}/{total_crc}\n  tiempo={t_crc:.3f} ms\n  detectados={det}\n\n")
+                    self.metrics_panel.insert(tk.END, f"Hamming final:\n  procesados={proc_ham}/{total_ham}\n  tiempo={t_ham:.3f} ms\n  corregidos={cor}\n  no_corregibles={no_corr}\n\n")
+                    self.metrics_panel.insert(tk.END, f"Ganador: {winner}\n")
             except Exception:
                 pass
         if self._worker and self._worker.is_alive() and not self._stop_event.is_set():
@@ -162,7 +177,7 @@ class App(tk.Tk):
                 crc = estado['crc']
                 ham = estado['ham']
                 self.lbl_crc_info.config(text=f"CRC: {crc.get('procesados',0)}/{crc.get('total',0)}, t={crc.get('tiempo_ms',0.0):.3f} ms, detectados={crc.get('detectados',0)}")
-                self.lbl_ham_info.config(text=f"Hamming: {ham.get('procesados',0)}/{ham.get('total',0)}, t={ham.get('tiempo_ms',0.0):.3f} ms, corregidos={ham.get('corregidos',0)}")
+                self.lbl_ham_info.config(text=f"Hamming: {ham.get('procesados',0)}/{ham.get('total',0)}, t={ham.get('tiempo_ms',0.0):.3f} ms, corregidos={ham.get('corregidos',0)}, no_corregibles={ham.get('no_corregibles',0)}")
                 t_crc = crc.get('tiempo_ms', 0.0)
                 t_ham = ham.get('tiempo_ms', 0.0)
                 if t_crc and t_ham:
