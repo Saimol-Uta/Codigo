@@ -12,15 +12,55 @@ from dataclasses import dataclass
 # pero aquí haremos la división larga explícita para mayor claridad.
 POLINOMIO_CRC = 0b100000111
 
-def calcular_crc(datos_bits: int, poly: int = POLINOMIO_CRC, data_bits: int = 8) -> int:
+# Polinomios CRC adicionales comunes
+POLINOMIOS_CRC = {
+    'CRC-8': 0b100000111,      # x^8 + x^2 + x + 1
+    'CRC-8-CCITT': 0b100000111,
+    'CRC-16-IBM': 0x18005,     # x^16 + x^15 + x^2 + 1
+    'CRC-16-CCITT': 0x11021,   # x^16 + x^12 + x^5 + 1
+    'CRC-32': 0x104C11DB7,     # Ethernet polynomial
+}
+
+# Cache para tablas de lookup CRC
+_crc_tables = {}
+
+def generar_tabla_crc(poly: int, bits: int = 8) -> list:
+    """Genera tabla de lookup para cálculos CRC rápidos."""
+    degree = poly.bit_length() - 1
+    tabla = []
+    for i in range(256):
+        valor = i << (degree - 8) if degree >= 8 else i >> (8 - degree)
+        for _ in range(8):
+            if valor & (1 << (degree - 1)):
+                valor = (valor << 1) ^ poly
+            else:
+                valor <<= 1
+        tabla.append(valor & ((1 << degree) - 1))
+    return tabla
+
+def calcular_crc(datos_bits: int, poly: int = POLINOMIO_CRC, data_bits: int = 8, usar_tabla: bool = True) -> int:
     """Calcula el CRC para una palabra de `data_bits` bits usando `poly`.
 
     Nota: asumimos que `poly` está dado como entero con el bit más significativo (grado) incluido.
     Para CRC-8, `poly` tiene 9 bits (grado 8), p.ej. 0b100000111.
+    
+    Args:
+        datos_bits: Datos a procesar
+        poly: Polinomio generador
+        data_bits: Número de bits de datos (típicamente 8)
+        usar_tabla: Si True, usa lookup table (más rápido)
     """
     degree = poly.bit_length() - 1
+    
+    # Método optimizado con tabla de lookup (solo para bytes completos)
+    if usar_tabla and data_bits == 8 and degree == 8:
+        if poly not in _crc_tables:
+            _crc_tables[poly] = generar_tabla_crc(poly)
+        tabla = _crc_tables[poly]
+        return tabla[datos_bits & 0xFF]
+    
+    # Método tradicional bit a bit
     dividendo = datos_bits << degree  # anadimos degree ceros
-    # Alineamos el divisor con el bit más significativo del dividendo
     shift = data_bits - 1
     divisor = poly << shift
     for i in range(data_bits):
@@ -69,6 +109,11 @@ def decodificar_corregir_hamming(codigo_recibido: int) -> int:
         # Síndrome 0 -> o no hay error o hay error no detectable por paridad (raro)
         return codigo_recibido, 'ok'
 
+    # Validar que la posición de error esté dentro del rango
+    if posicion_error > 12:
+        # Múltiples errores: no corregible
+        return codigo_recibido, 'no_corregible'
+
     # Corregir bit indicado
     corregido = codigo_recibido ^ (1 << (12 - posicion_error))
 
@@ -89,10 +134,41 @@ def decodificar_corregir_hamming(codigo_recibido: int) -> int:
 
 # --- UTILIDADES DE SIMULACIÓN Y PROGRESO ---
 
+# Tipos de errores para simulación más realista
+TIPO_ERROR_UN_BIT = 'un_bit'
+TIPO_ERROR_DOS_BITS = 'dos_bits'
+TIPO_ERROR_RAFAGA = 'rafaga'  # burst error
+
 def simular_error_un_bit(valor: int, ancho_bits: int) -> int:
     """Invierte un bit aleatorio dentro de un valor de 'ancho_bits' bits."""
     pos = random.randint(0, ancho_bits - 1)
     return valor ^ (1 << pos)
+
+def simular_error_multiples_bits(valor: int, ancho_bits: int, num_errores: int = 2) -> int:
+    """Invierte múltiples bits aleatorios."""
+    resultado = valor
+    posiciones = random.sample(range(ancho_bits), min(num_errores, ancho_bits))
+    for pos in posiciones:
+        resultado ^= (1 << pos)
+    return resultado
+
+def simular_error_rafaga(valor: int, ancho_bits: int, longitud_rafaga: int = 3) -> int:
+    """Simula un error en ráfaga (burst): bits consecutivos alterados."""
+    inicio = random.randint(0, max(0, ancho_bits - longitud_rafaga))
+    resultado = valor
+    for i in range(longitud_rafaga):
+        if inicio + i < ancho_bits:
+            resultado ^= (1 << (inicio + i))
+    return resultado
+
+def simular_error(valor: int, ancho_bits: int, tipo_error: str = TIPO_ERROR_UN_BIT) -> int:
+    """Simula un error según el tipo especificado."""
+    if tipo_error == TIPO_ERROR_DOS_BITS:
+        return simular_error_multiples_bits(valor, ancho_bits, 2)
+    elif tipo_error == TIPO_ERROR_RAFAGA:
+        return simular_error_rafaga(valor, ancho_bits, 3)
+    else:  # TIPO_ERROR_UN_BIT
+        return simular_error_un_bit(valor, ancho_bits)
 
 def barra_progreso(nombre: str, hecho: int, total: int, ancho: int = 30, extra: str = "") -> str:
     if total <= 0:
@@ -108,52 +184,146 @@ class Resultado:
     procesados: int
     tiempo_ms: float
     metrica: str
+    detectados: int = 0
+    corregidos: int = 0
+    no_detectados: int = 0
+    no_corregibles: int = 0
+    falsos_positivos: int = 0
+    overhead_bits: int = 0
+    
+    @property
+    def tasa_deteccion(self) -> float:
+        """Porcentaje de errores detectados."""
+        if self.total == 0:
+            return 0.0
+        return (self.detectados / self.total) * 100
+    
+    @property
+    def tasa_correccion(self) -> float:
+        """Porcentaje de errores corregidos."""
+        if self.total == 0:
+            return 0.0
+        return (self.corregidos / self.total) * 100
+    
+    @property
+    def eficiencia(self) -> float:
+        """Eficiencia: bits útiles / bits totales."""
+        if self.overhead_bits == 0:
+            return 100.0
+        bits_datos = self.total * 8
+        bits_totales = bits_datos + self.overhead_bits
+        return (bits_datos / bits_totales) * 100
+    
+    @property
+    def throughput(self) -> float:
+        """Throughput en MB/s."""
+        if self.tiempo_ms == 0:
+            return 0.0
+        return (self.total / (self.tiempo_ms / 1000)) / (1024 * 1024)
 
 
-def procesar_crc(bytes_data: bytes, estado: dict, lock: threading.Lock, sleep_ms: float = 0.0, poly: int = POLINOMIO_CRC) -> Resultado:
+def procesar_crc(bytes_data: bytes, estado: dict, lock: threading.Lock, sleep_ms: float = 0.0, poly: int = POLINOMIO_CRC, tipo_error: str = TIPO_ERROR_UN_BIT) -> Resultado:
+    """Procesa datos con CRC y simula errores para evaluar detección."""
     inicio = time.perf_counter()
     total = len(bytes_data)
     detectados = 0
+    no_detectados = 0
+    falsos_positivos = 0
     procesados = 0
+    degree = poly.bit_length() - 1
+    
     for b in bytes_data:
+        # Codificar
         crc = calcular_crc(b, poly=poly)
-        paquete = (b << 8) | crc  # 16 bits
-        recibido = simular_error_un_bit(paquete, 16)  # error de 1 bit
-        ok = verificar_crc(recibido)
-        if not ok:
-            detectados += 1
+        paquete = (b << degree) | crc  # bits de datos + CRC
+        
+        # Simular error
+        recibido = simular_error(paquete, 8 + degree, tipo_error)
+        
+        # Verificar
+        tiene_error = (recibido != paquete)  # error real introducido
+        crc_detecta = not verificar_crc(recibido, poly=poly)
+        
+        if tiene_error:
+            if crc_detecta:
+                detectados += 1
+            else:
+                no_detectados += 1
+        else:
+            if crc_detecta:
+                falsos_positivos += 1
+        
         procesados += 1
         with lock:
             estado['crc']['procesados'] = procesados
             estado['crc']['detectados'] = detectados
+            estado['crc']['no_detectados'] = no_detectados
+        
         if sleep_ms:
             time.sleep(sleep_ms / 1000.0)
+    
     fin = time.perf_counter()
-    return Resultado(total=total, procesados=procesados, tiempo_ms=(fin - inicio) * 1000.0, metrica=f"errores detectados: {detectados}")
+    overhead = total * degree  # bits de overhead (CRC)
+    
+    return Resultado(
+        total=total,
+        procesados=procesados,
+        tiempo_ms=(fin - inicio) * 1000.0,
+        metrica=f"detectados: {detectados}, no detectados: {no_detectados}",
+        detectados=detectados,
+        no_detectados=no_detectados,
+        falsos_positivos=falsos_positivos,
+        overhead_bits=overhead
+    )
 
-def procesar_hamming(bytes_data: bytes, estado: dict, lock: threading.Lock, sleep_ms: float = 0.0) -> Resultado:
+def procesar_hamming(bytes_data: bytes, estado: dict, lock: threading.Lock, sleep_ms: float = 0.0, tipo_error: str = TIPO_ERROR_UN_BIT) -> Resultado:
+    """Procesa datos con código de Hamming y simula errores para evaluar corrección."""
     inicio = time.perf_counter()
     total = len(bytes_data)
     corregidos = 0
     no_corregibles = 0
+    correctos = 0
     procesados = 0
+    
     for b in bytes_data:
+        # Codificar
         codigo = codificar_hamming(b)  # 12 bits
-        recibido = simular_error_un_bit(codigo, 12)
+        
+        # Simular error
+        recibido = simular_error(codigo, 12, tipo_error)
+        
+        # Decodificar y corregir
         corregido, status = decodificar_corregir_hamming(recibido)
+        
         if status == 'corregido':
             corregidos += 1
         elif status == 'no_corregible':
             no_corregibles += 1
+        elif status == 'ok':
+            correctos += 1
+            
         procesados += 1
         with lock:
             estado['ham']['procesados'] = procesados
             estado['ham']['corregidos'] = corregidos
             estado['ham']['no_corregibles'] = no_corregibles
+            estado['ham']['correctos'] = correctos
+        
         if sleep_ms:
             time.sleep(sleep_ms / 1000.0)
+    
     fin = time.perf_counter()
-    return Resultado(total=total, procesados=procesados, tiempo_ms=(fin - inicio) * 1000.0, metrica=f"errores corregidos: {corregidos}, no_corregibles: {no_corregibles}")
+    overhead = total * 4  # bits de overhead (4 bits de paridad por cada 8 de datos)
+    
+    return Resultado(
+        total=total,
+        procesados=procesados,
+        tiempo_ms=(fin - inicio) * 1000.0,
+        metrica=f"corregidos: {corregidos}, no_corregibles: {no_corregibles}",
+        corregidos=corregidos,
+        no_corregibles=no_corregibles,
+        overhead_bits=overhead
+    )
 
 
 def render_barras(estado: dict, lock: threading.Lock, stop_event: threading.Event, inicio_crc: float, inicio_ham: float):
@@ -198,23 +368,37 @@ def main():
     parser.add_argument("--byte", type=int, default=None, help="Valor de 8 bits para benchmark (0-255). Si se pasa, se ejecuta benchmark en modo por-byte con --iters")
     parser.add_argument("--iters", type=int, default=100000, help="Número de iteraciones para el benchmark por byte")
     parser.add_argument("--sleep-ms", type=float, default=0.0, help="Retardo artificial por byte para visualizar mejor")
+    parser.add_argument("--error-type", type=str, default=TIPO_ERROR_UN_BIT, 
+                       choices=[TIPO_ERROR_UN_BIT, TIPO_ERROR_DOS_BITS, TIPO_ERROR_RAFAGA],
+                       help="Tipo de error a simular: un_bit, dos_bits, rafaga")
     args = parser.parse_args()
 
     # Parse polinomio si fue pasado
     if args.poly is None:
         poly = POLINOMIO_CRC
+        poly_name = "CRC-8"
     else:
         s = args.poly.strip()
         try:
-            if s.startswith("0x") or s.startswith("0X"):
+            # Verificar si es un nombre predefinido
+            if s in POLINOMIOS_CRC:
+                poly = POLINOMIOS_CRC[s]
+                poly_name = s
+            elif s.startswith("0x") or s.startswith("0X"):
                 poly = int(s, 16)
+                poly_name = f"Custom (0x{poly:X})"
             elif s.startswith("0b") or s.startswith("0B"):
                 poly = int(s, 2)
+                poly_name = f"Custom (0b{poly:b})"
             else:
                 poly = int(s, 0)
+                poly_name = f"Custom ({poly})"
         except Exception:
             print(f"Polinomio inválido: {s}. Usando polinomio por defecto.")
             poly = POLINOMIO_CRC
+            poly_name = "CRC-8"
+    
+    print(f"Usando polinomio: {poly_name} = 0b{poly:b}")
 
     # Modo benchmark por byte: comparar procesamiento de una sola palabra de 8 bits
     if args.byte is not None:
@@ -271,8 +455,8 @@ def main():
     # Estado compartido para las barras
     lock = threading.Lock()
     estado = {
-        'crc': {'total': total, 'procesados': 0, 'detectados': 0, 'tiempo_ms': 0.0},
-        'ham': {'total': total, 'procesados': 0, 'corregidos': 0, 'tiempo_ms': 0.0},
+        'crc': {'total': total, 'procesados': 0, 'detectados': 0, 'no_detectados': 0, 'tiempo_ms': 0.0},
+        'ham': {'total': total, 'procesados': 0, 'corregidos': 0, 'no_corregibles': 0, 'correctos': 0, 'tiempo_ms': 0.0},
     }
 
     stop_event = threading.Event()
@@ -290,14 +474,14 @@ def main():
     def tarea_crc():
         nonlocal resultado_crc, inicio_crc
         inicio_crc = time.perf_counter()
-        resultado_crc = procesar_crc(datos, estado, lock, args.sleep_ms, poly=poly)
+        resultado_crc = procesar_crc(datos, estado, lock, args.sleep_ms, poly=poly, tipo_error=args.error_type)
         with lock:
             estado['crc']['tiempo_ms'] = resultado_crc.tiempo_ms
 
     def tarea_ham():
         nonlocal resultado_ham, inicio_ham
         inicio_ham = time.perf_counter()
-        resultado_ham = procesar_hamming(datos, estado, lock, args.sleep_ms)
+        resultado_ham = procesar_hamming(datos, estado, lock, args.sleep_ms, tipo_error=args.error_type)
         with lock:
             estado['ham']['tiempo_ms'] = resultado_ham.tiempo_ms
 
@@ -315,15 +499,46 @@ def main():
 
     # Resumen
     assert resultado_crc is not None and resultado_ham is not None
-    print("\nResumen:")
-    print(f"- CRC-8:  tiempo = {resultado_crc.tiempo_ms:.2f} ms, {resultado_crc.metrica}")
-    print(f"- Hamming: tiempo = {resultado_ham.tiempo_ms:.2f} ms, {resultado_ham.metrica}")
+    print("\n" + "="*80)
+    print("RESUMEN DETALLADO DE LA SIMULACIÓN")
+    print("="*80)
+    print(f"\nTipo de error simulado: {args.error_type}")
+    print(f"Total de bytes procesados: {total}")
+    
+    print("\n--- CRC-8 ---")
+    print(f"  Tiempo:           {resultado_crc.tiempo_ms:.3f} ms")
+    print(f"  Throughput:       {resultado_crc.throughput:.3f} MB/s")
+    print(f"  Errores detectados: {resultado_crc.detectados}/{total} ({resultado_crc.tasa_deteccion:.1f}%)")
+    print(f"  No detectados:    {resultado_crc.no_detectados}/{total}")
+    print(f"  Overhead:         {resultado_crc.overhead_bits} bits ({(resultado_crc.overhead_bits/(total*8))*100:.1f}%)")
+    print(f"  Eficiencia:       {resultado_crc.eficiencia:.2f}%")
+    
+    print("\n--- Hamming (12,8) ---")
+    print(f"  Tiempo:           {resultado_ham.tiempo_ms:.3f} ms")
+    print(f"  Throughput:       {resultado_ham.throughput:.3f} MB/s")
+    print(f"  Errores corregidos: {resultado_ham.corregidos}/{total} ({resultado_ham.tasa_correccion:.1f}%)")
+    print(f"  No corregibles:   {resultado_ham.no_corregibles}/{total}")
+    print(f"  Overhead:         {resultado_ham.overhead_bits} bits ({(resultado_ham.overhead_bits/(total*8))*100:.1f}%)")
+    print(f"  Eficiencia:       {resultado_ham.eficiencia:.2f}%")
+    
+    print("\n--- Comparación ---")
     if resultado_crc.tiempo_ms < resultado_ham.tiempo_ms:
-        print("Más rápido: CRC-8")
+        velocidad_ganador = "CRC-8"
+        diferencia = ((resultado_ham.tiempo_ms / resultado_crc.tiempo_ms - 1) * 100)
     elif resultado_crc.tiempo_ms > resultado_ham.tiempo_ms:
-        print("Más rápido: Hamming")
+        velocidad_ganador = "Hamming"
+        diferencia = ((resultado_crc.tiempo_ms / resultado_ham.tiempo_ms - 1) * 100)
     else:
-        print("Empate exacto")
+        velocidad_ganador = "Empate"
+        diferencia = 0
+    
+    print(f"  Más rápido: {velocidad_ganador} ({diferencia:.1f}% más rápido)" if velocidad_ganador != "Empate" else "  Empate en velocidad")
+    
+    # Comparación de capacidades
+    print(f"\n  Capacidad de detección CRC: {resultado_crc.tasa_deteccion:.1f}%")
+    print(f"  Capacidad de corrección Hamming: {resultado_ham.tasa_correccion:.1f}%")
+    
+    print("\n" + "="*80)
 
 
 if __name__ == "__main__":

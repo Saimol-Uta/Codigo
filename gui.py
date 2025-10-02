@@ -7,6 +7,14 @@ from tkinter.scrolledtext import ScrolledText
 # Reuse functions from index.py by importing it as a module
 import index
 
+# Intentar importar visualización (opcional)
+try:
+    from visualizacion import mostrar_graficos_comparativos
+    TIENE_GRAFICOS = True
+except ImportError:
+    TIENE_GRAFICOS = False
+    print("Módulo de visualización no disponible. Instale matplotlib y numpy para habilitar gráficos.")
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -26,61 +34,78 @@ class App(tk.Tk):
         self.text_entry.insert(0, "Hola CRC y Hamming desde GUI")
 
         # Row: Polinomio (combobox)
-        ttk.Label(frm, text="Polinomio (ej. 0b100000111):").grid(column=0, row=1, sticky=tk.W)
-        self.poly_combo = ttk.Combobox(frm, values=["0b100000111", "0x107", "0x7", "0x9B"], width=18)
+        ttk.Label(frm, text="Polinomio CRC:").grid(column=0, row=1, sticky=tk.W)
+        self.poly_combo = ttk.Combobox(frm, values=list(index.POLINOMIOS_CRC.keys()), width=18)
         self.poly_combo.grid(column=1, row=1, sticky=tk.W)
-        self.poly_combo.set("0b100000111")
+        self.poly_combo.set("CRC-8")
+        
+        # Row: Tipo de error
+        ttk.Label(frm, text="Tipo de error:").grid(column=2, row=1, sticky=tk.W)
+        self.error_combo = ttk.Combobox(frm, 
+                                        values=[index.TIPO_ERROR_UN_BIT, index.TIPO_ERROR_DOS_BITS, index.TIPO_ERROR_RAFAGA],
+                                        width=12)
+        self.error_combo.grid(column=3, row=1, sticky=tk.W)
+        self.error_combo.set(index.TIPO_ERROR_UN_BIT)
 
-        # Row: Sleep ms
-        ttk.Label(frm, text="Sleep ms (visual):").grid(column=2, row=1, sticky=tk.W)
+        # Sleep ms en una nueva fila
+        ttk.Label(frm, text="Sleep ms (visual):").grid(column=0, row=2, sticky=tk.W)
         self.sleep_entry = ttk.Entry(frm, width=8)
-        self.sleep_entry.grid(column=3, row=1, sticky=tk.W)
+        self.sleep_entry.grid(column=1, row=2, sticky=tk.W)
         self.sleep_entry.insert(0, "2")
 
-        # Row: Byte / Iters for benchmark
-        ttk.Label(frm, text="Modo byte (opcional):").grid(column=0, row=2, sticky=tk.W)
+        # Row: Byte / Iters for benchmark - actualizar row numbers
+        ttk.Label(frm, text="Modo byte (opcional):").grid(column=0, row=3, sticky=tk.W)
         self.byte_entry = ttk.Entry(frm, width=8)
-        self.byte_entry.grid(column=1, row=2, sticky=tk.W)
+        self.byte_entry.grid(column=1, row=3, sticky=tk.W)
         self.byte_entry.insert(0, "")
-        ttk.Label(frm, text="Iters:").grid(column=2, row=2, sticky=tk.W)
+        ttk.Label(frm, text="Iters:").grid(column=2, row=3, sticky=tk.W)
         self.iters_entry = ttk.Entry(frm, width=12)
-        self.iters_entry.grid(column=3, row=2, sticky=tk.W)
+        self.iters_entry.grid(column=3, row=3, sticky=tk.W)
         self.iters_entry.insert(0, "100000")
 
-        # Progress bars
-        ttk.Label(frm, text="CRC-8:").grid(column=0, row=3, sticky=tk.W)
+        # Progress bars - actualizar row numbers
+        ttk.Label(frm, text="CRC-8:").grid(column=0, row=4, sticky=tk.W)
         self.pb_crc = ttk.Progressbar(frm, maximum=100, length=500)
-        self.pb_crc.grid(column=1, row=3, columnspan=3, sticky=tk.W)
+        self.pb_crc.grid(column=1, row=4, columnspan=3, sticky=tk.W)
 
-        ttk.Label(frm, text="Hamming:").grid(column=0, row=4, sticky=tk.W)
+        ttk.Label(frm, text="Hamming:").grid(column=0, row=5, sticky=tk.W)
         self.pb_ham = ttk.Progressbar(frm, maximum=100, length=500)
-        self.pb_ham.grid(column=1, row=4, columnspan=3, sticky=tk.W)
+        self.pb_ham.grid(column=1, row=5, columnspan=3, sticky=tk.W)
 
         # Info labels under progressbars
         self.lbl_crc_info = ttk.Label(frm, text="CRC: 0/0, t=0.0ms, detectados=0")
-        self.lbl_crc_info.grid(column=1, row=5, columnspan=3, sticky=tk.W)
+        self.lbl_crc_info.grid(column=1, row=6, columnspan=3, sticky=tk.W)
         self.lbl_ham_info = ttk.Label(frm, text="Hamming: 0/0, t=0.0ms, corregidos=0, no_corregibles=0")
-        self.lbl_ham_info.grid(column=1, row=6, columnspan=3, sticky=tk.W)
+        self.lbl_ham_info.grid(column=1, row=7, columnspan=3, sticky=tk.W)
         self.lbl_summary = ttk.Label(frm, text="Resumen: -")
-        self.lbl_summary.grid(column=0, row=7, columnspan=4, sticky=tk.W)
+        self.lbl_summary.grid(column=0, row=8, columnspan=4, sticky=tk.W)
 
         # Buttons
         self.run_btn = ttk.Button(frm, text="Ejecutar", command=self.on_run)
-        self.run_btn.grid(column=1, row=8, sticky=tk.W)
+        self.run_btn.grid(column=1, row=9, sticky=tk.W)
         self.stop_btn = ttk.Button(frm, text="Detener", command=self.on_stop, state=tk.DISABLED)
-        self.stop_btn.grid(column=2, row=8, sticky=tk.W)
+        self.stop_btn.grid(column=2, row=9, sticky=tk.W)
+        
+        # Botón para mostrar gráficos (solo si está disponible)
+        if TIENE_GRAFICOS:
+            self.graph_btn = ttk.Button(frm, text="Ver Gráficos", command=self.on_show_graphs, state=tk.DISABLED)
+            self.graph_btn.grid(column=3, row=9, sticky=tk.W)
+        else:
+            self.graph_btn = None
 
         # Log / resumen
         self.log = ScrolledText(frm, height=10)
-        self.log.grid(column=0, row=9, columnspan=4, sticky=tk.EW)
+        self.log.grid(column=0, row=10, columnspan=4, sticky=tk.EW)
 
         # Detailed metrics panel
         self.metrics_panel = ScrolledText(frm, height=6)
-        self.metrics_panel.grid(column=0, row=10, columnspan=4, sticky=tk.EW)
+        self.metrics_panel.grid(column=0, row=11, columnspan=4, sticky=tk.EW)
 
         # Internal
         self._worker = None
         self._stop_event = threading.Event()
+        self._resultado_crc = None
+        self._resultado_ham = None
 
     def on_run(self):
         # Disable run, enable stop
@@ -90,6 +115,7 @@ class App(tk.Tk):
         self._stop_event.clear()
         texto = self.text_entry.get()
         poly_s = self.poly_combo.get().strip()
+        error_type = self.error_combo.get().strip()
         try:
             sleep_ms = float(self.sleep_entry.get() or 0)
         except Exception:
@@ -102,7 +128,9 @@ class App(tk.Tk):
 
         # Resolve poly from combobox string
         try:
-            if poly_s.startswith("0x"):
+            if poly_s in index.POLINOMIOS_CRC:
+                poly = index.POLINOMIOS_CRC[poly_s]
+            elif poly_s.startswith("0x"):
                 poly = int(poly_s, 16)
             elif poly_s.startswith("0b"):
                 poly = int(poly_s, 2)
@@ -117,7 +145,7 @@ class App(tk.Tk):
             return
 
         # Start worker thread
-        self._worker = threading.Thread(target=self.worker_task, args=(texto, poly, sleep_ms, byte_s, iters), daemon=True)
+        self._worker = threading.Thread(target=self.worker_task, args=(texto, poly, sleep_ms, byte_s, iters, error_type), daemon=True)
         self._worker.start()
         self.after(100, self.ui_update)
 
@@ -125,6 +153,13 @@ class App(tk.Tk):
         self._stop_event.set()
         self.stop_btn.config(state=tk.DISABLED)
         self.run_btn.config(state=tk.NORMAL)
+    
+    def on_show_graphs(self):
+        """Muestra la ventana con gráficos comparativos."""
+        if self._resultado_crc and self._resultado_ham and TIENE_GRAFICOS:
+            mostrar_graficos_comparativos(self, self._resultado_crc, self._resultado_ham)
+        else:
+            messagebox.showinfo("Info", "Primero ejecute una simulación completa.")
 
     def ui_update(self):
         # Periodically update progress bars from index.estado if available
@@ -171,6 +206,9 @@ class App(tk.Tk):
         else:
             self.run_btn.config(state=tk.NORMAL)
             self.stop_btn.config(state=tk.DISABLED)
+            # Habilitar botón de gráficos si hay resultados
+            if self.graph_btn and self._resultado_crc and self._resultado_ham:
+                self.graph_btn.config(state=tk.NORMAL)
             # final update in case state exists
             try:
                 estado = index.estado
@@ -191,7 +229,7 @@ class App(tk.Tk):
             except Exception:
                 pass
 
-    def worker_task(self, texto, poly, sleep_ms, byte_s, iters):
+    def worker_task(self, texto, poly, sleep_ms, byte_s, iters, error_type):
         # If byte_s specified, run benchmark
         if byte_s != "":
             try:
@@ -208,7 +246,7 @@ class App(tk.Tk):
                     break
                 crc = index.calcular_crc(b, poly=poly)
                 paquete = (b << (poly.bit_length() - 1)) | crc
-                recibido = index.simular_error_un_bit(paquete, (8 + (poly.bit_length() - 1)))
+                recibido = index.simular_error(paquete, (8 + (poly.bit_length() - 1)), error_type)
                 _ = index.verificar_crc(recibido, poly=poly)
                 if i % (iters // 10 or 1) == 0:
                     self.log.insert(tk.END, f"CRC iter {i}\n")
@@ -218,7 +256,7 @@ class App(tk.Tk):
                 if self._stop_event.is_set():
                     break
                 codigo = index.codificar_hamming(b)
-                recibido = index.simular_error_un_bit(codigo, 12)
+                recibido = index.simular_error(codigo, 12, error_type)
                 _ = index.decodificar_corregir_hamming(recibido)
                 if i % (iters // 10 or 1) == 0:
                     self.log.insert(tk.END, f"HAM iter {i}\n")
@@ -232,19 +270,21 @@ class App(tk.Tk):
         # Otherwise run the text-mode simulation using index.main logic
         # Set index.estado so GUI can read progress
         index.estado = {
-            'crc': {'total': len(texto.encode('utf-8')), 'procesados': 0, 'detectados': 0, 'tiempo_ms': 0.0},
-            'ham': {'total': len(texto.encode('utf-8')), 'procesados': 0, 'corregidos': 0, 'tiempo_ms': 0.0},
+            'crc': {'total': len(texto.encode('utf-8')), 'procesados': 0, 'detectados': 0, 'no_detectados': 0, 'tiempo_ms': 0.0},
+            'ham': {'total': len(texto.encode('utf-8')), 'procesados': 0, 'corregidos': 0, 'no_corregibles': 0, 'correctos': 0, 'tiempo_ms': 0.0},
         }
         lock = threading.Lock()
         stop_event = self._stop_event
 
         def tarea_crc():
-            res = index.procesar_crc(texto.encode('utf-8'), index.estado, lock, sleep_ms, poly=poly)
+            res = index.procesar_crc(texto.encode('utf-8'), index.estado, lock, sleep_ms, poly=poly, tipo_error=error_type)
             index.estado['crc']['tiempo_ms'] = res.tiempo_ms
+            self._resultado_crc = res
 
         def tarea_ham():
-            res = index.procesar_hamming(texto.encode('utf-8'), index.estado, lock, sleep_ms)
+            res = index.procesar_hamming(texto.encode('utf-8'), index.estado, lock, sleep_ms, tipo_error=error_type)
             index.estado['ham']['tiempo_ms'] = res.tiempo_ms
+            self._resultado_ham = res
 
         th1 = threading.Thread(target=tarea_crc, daemon=True)
         th2 = threading.Thread(target=tarea_ham, daemon=True)
